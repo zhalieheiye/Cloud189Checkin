@@ -1,14 +1,26 @@
-require("dotenv").config();
+const path = require("path");
+
+const envResult = require("dotenv").config({
+  path: path.resolve(__dirname, "../.env"),
+  override: true,
+});
+
+if (envResult.error) {
+  throw envResult.error;
+}
+
 const {
   CloudClient,
   FileTokenStore,
   logger: sdkLogger,
 } = require("cloud189-sdk");
+
 const recording = require("log4js/lib/appenders/recording");
 const accounts = require("../accounts");
 const { mask, delay } = require("./utils");
 const push = require("./push");
 const { log4js, cleanLogs, catLogs } = require("./logger");
+
 const tokenDir = ".token";
 
 sdkLogger.configure({
@@ -17,34 +29,42 @@ sdkLogger.configure({
 
 // 个人任务签到
 const doUserTask = async (cloudClient, logger) => {
-  const result = await cloudClient.userSign()
-  const netdiskBonus = result.isSign? 0: result.netdiskBonus
+  const result = await cloudClient.userSign();
+  const netdiskBonus = result.isSign ? 0 : result.netdiskBonus;
   logger.info(`个人签到任务: 获得 ${netdiskBonus}M 空间`);
 };
 
 const run = async (userName, password, userSizeInfoMap, logger) => {
   if (userName && password) {
     const before = Date.now();
+
     try {
       logger.log("开始执行");
+
       const cloudClient = new CloudClient({
         username: userName,
         password,
         token: new FileTokenStore(`${tokenDir}/${userName}.json`),
       });
+
       const beforeUserSizeInfo = await cloudClient.getUserSizeInfo();
+
       userSizeInfoMap.set(userName, {
         cloudClient,
         userSizeInfo: beforeUserSizeInfo,
         logger,
       });
+
       await Promise.all([doUserTask(cloudClient, logger)]);
     } catch (e) {
       if (e.response) {
-        logger.log(`请求失败: ${e.response.statusCode}, ${e.response.body}`);
+        logger.log(
+          `请求失败: ${e.response.statusCode}, ${e.response.body}`
+        );
       } else {
         logger.error(e);
       }
+
       if (e.code === "ECONNRESET" || e.code === "ETIMEDOUT") {
         logger.error("请求超时");
         throw e;
@@ -59,23 +79,24 @@ const run = async (userName, password, userSizeInfoMap, logger) => {
 
 // 开始执行程序
 async function main() {
-  //  用于统计实际容量变化
   const userSizeInfoMap = new Map();
+
   for (let index = 0; index < accounts.length; index++) {
-    const account = accounts[index];
-    const { userName, password } = account;
+    const { userName, password } = accounts[index];
     const userNameInfo = mask(userName, 3, 7);
     const logger = log4js.getLogger(userName);
+
     logger.addContext("user", userNameInfo);
     await run(userName, password, userSizeInfoMap, logger);
   }
 
-  //数据汇总
+  // 数据汇总
   for (const [
     userName,
     { cloudClient, userSizeInfo, logger },
   ] of userSizeInfoMap) {
     const afterUserSizeInfo = await cloudClient.getUserSizeInfo();
+
     logger.log(
       `个人容量：⬆️  ${(
         (afterUserSizeInfo.cloudCapacityInfo.totalSize -
@@ -106,13 +127,17 @@ async function main() {
 (async () => {
   try {
     await main();
-    //等待日志文件写入
+    // 等待日志文件写入
     await delay(1000);
   } finally {
     const logs = catLogs();
     const events = recording.replay();
-    const content = events.map((e) => `${e.data.join("")}`).join("  \n");
+    const content = events
+      .map((e) => `${e.data.join("")}`)
+      .join("  \n");
+
     push("天翼云盘自动签到任务", logs + content);
+
     recording.erase();
     cleanLogs();
   }
